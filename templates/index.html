@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reading list</title>
+<style>
+  :root {
+    --paper: #eef1f4; --ink: #1b2430; --muted: #5d6877; --line: #c9d0d9;
+    --to-read: #8f3b3b; --reading: #c8962e; --finished: #2f5d50;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink);
+         font-family: system-ui, -apple-system, "Segoe UI", sans-serif; line-height: 1.5; }
+  main { max-width: 640px; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+  h1 { font-family: Georgia, "Times New Roman", serif; font-size: 2.4rem; margin: 0 0 .25rem; }
+  .sub { color: var(--muted); margin: 0 0 2rem; }
+  form { display: grid; grid-template-columns: 1fr 1fr auto; gap: .5rem; margin-bottom: 1.5rem; }
+  input, button { font: inherit; padding: .55rem .7rem; border: 1px solid var(--line);
+                  background: #fff; color: var(--ink); border-radius: 4px; }
+  button { cursor: pointer; }
+  button.primary { background: var(--ink); color: #fff; border-color: var(--ink); }
+  :focus-visible { outline: 3px solid var(--reading); outline-offset: 2px; }
+  .filters { display: flex; gap: .4rem; margin-bottom: 1rem; flex-wrap: wrap; }
+  .filters button[aria-pressed="true"] { background: var(--ink); color: #fff; border-color: var(--ink); }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { display: grid; grid-template-columns: 10px 1fr auto; gap: 1rem; align-items: center;
+       background: #fff; border: 1px solid var(--line); border-radius: 4px;
+       margin-bottom: .5rem; padding: .75rem 1rem .75rem 0; }
+  .spine { align-self: stretch; border-radius: 4px 0 0 4px; }
+  .to-read .spine { background: var(--to-read); }
+  .reading .spine { background: var(--reading); }
+  .finished .spine { background: var(--finished); }
+  .title { font-family: Georgia, serif; font-size: 1.1rem; }
+  .author { color: var(--muted); font-size: .9rem; }
+  select { font: inherit; padding: .35rem; border: 1px solid var(--line); border-radius: 4px; }
+  .empty, .error { color: var(--muted); padding: 1rem 0; }
+  .error { color: var(--to-read); }
+  footer { margin-top: 2rem; color: var(--muted); font-size: .85rem; }
+  @media (max-width: 520px) { form { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Reading list</h1>
+  <p class="sub">Books to read, in progress, and finished.</p>
+
+  <form id="add-form">
+    <input id="title" placeholder="Title" aria-label="Title" required>
+    <input id="author" placeholder="Author" aria-label="Author" required>
+    <button class="primary" type="submit">Add book</button>
+  </form>
+  <p id="error" class="error" role="alert" hidden></p>
+
+  <div class="filters" id="filters"></div>
+  <ul id="list"></ul>
+  <p id="empty" class="empty" hidden>No books here yet. Add one above.</p>
+
+  <footer>Version: {{ version }}</footer>
+</main>
+
+<script>
+const LABELS = {"": "All", "to-read": "To read", "reading": "Reading", "finished": "Finished"};
+let filter = "";
+
+async function api(path, options) {
+  const res = await fetch(path, options);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || "Request failed");
+  return body;
+}
+
+function showError(msg) {
+  const el = document.getElementById("error");
+  el.textContent = msg || "";
+  el.hidden = !msg;
+}
+
+function renderFilters() {
+  const box = document.getElementById("filters");
+  box.replaceChildren();
+  for (const [value, label] of Object.entries(LABELS)) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = label;
+    b.setAttribute("aria-pressed", String(filter === value));
+    b.onclick = () => { filter = value; renderFilters(); load(); };
+    box.appendChild(b);
+  }
+}
+
+async function load() {
+  try {
+    showError("");
+    const books = await api("/books" + (filter ? "?status=" + filter : ""));
+    const list = document.getElementById("list");
+    list.replaceChildren();
+    for (const book of books) {
+      const li = document.createElement("li");
+      li.className = book.status;
+      const spine = document.createElement("div");
+      spine.className = "spine";
+      const info = document.createElement("div");
+      const t = document.createElement("div"); t.className = "title"; t.textContent = book.title;
+      const a = document.createElement("div"); a.className = "author"; a.textContent = book.author;
+      info.append(t, a);
+      const sel = document.createElement("select");
+      sel.setAttribute("aria-label", "Status of " + book.title);
+      for (const s of ["to-read", "reading", "finished"]) {
+        const o = document.createElement("option");
+        o.value = s; o.textContent = LABELS[s]; o.selected = s === book.status;
+        sel.appendChild(o);
+      }
+      sel.onchange = async () => {
+        try {
+          await api("/books/" + book.id, {method: "PATCH",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({status: sel.value})});
+          load();
+        } catch (e) { showError(e.message); }
+      };
+      li.append(spine, info, sel);
+      list.appendChild(li);
+    }
+    document.getElementById("empty").hidden = books.length > 0;
+  } catch (e) { showError(e.message); }
+}
+
+document.getElementById("add-form").onsubmit = async (ev) => {
+  ev.preventDefault();
+  try {
+    await api("/books", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({title: document.getElementById("title").value,
+                            author: document.getElementById("author").value})});
+    ev.target.reset();
+    load();
+  } catch (e) { showError(e.message); }
+};
+
+renderFilters();
+load();
+</script>
+</body>
+</html>
